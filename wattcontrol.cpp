@@ -1,5 +1,6 @@
 // =============================================================
 // WattControl EA2 - Gestor de Energia para Negocios (El Nino 2026)
+// Negocio: Panaderia El Rosario (Digito 0-1)
 // =============================================================
 
 #include <iostream>
@@ -23,13 +24,13 @@ const float POTENCIA_AMASADORA     = 4.5; // Carga Aplazable 2 (kW)
 
 const float POTENCIA_CONTRATADA    = 15.0; // Maxima potencia permitida (kW)
 const float PRECIO_CARO            = 600.0; // COP/kWh (Limite hora pico)
-const float PRECIO_EMERGENCIA      = 1500.0;// COP/kWh
+const float PRECIO_EMERGENCIA      = 1500.0;// COP/kWh (Umbral de racionamiento)
 const float EMBALSES_ALERTA        = 40.0;  // Nivel critico embalses (%)
 
 const int PICO_INICIO              = 18;    // 6 PM
 const int PICO_FIN                 = 20;    // 8 PM
 
-const int MIN_HORAS_HORNO          = 6;     // Horas minimas requeridas
+const int MIN_HORAS_HORNO          = 6;     // Horas minimas requeridas por dia
 const int MIN_HORAS_AMASADORA      = 4;
 
 const int FALLA_CADA               = 20;
@@ -46,6 +47,7 @@ public:
     Carga(string n, float p) : nombre(n), potenciaKW(p), encendida(false), horasUso(0) {}
     virtual ~Carga() {}
 
+    // Metodo Virtual Puro (Polimorfismo)
     virtual bool debeEncender(int hora, float precio, float embalses) = 0;
 
     void encender() { encendida = true; horasUso++; }
@@ -74,6 +76,7 @@ class CargaAplazable : public Carga {
 public:
     CargaAplazable(string n, float p) : Carga(n, p) {}
     bool debeEncender(int hora, float precio, float embalses) override {
+        // Reglas 2 a 5: Condicion compuesta con operadores logicos (&&, ||, !)
         bool horaPico = (hora >= PICO_INICIO && hora <= PICO_FIN);
         bool aplazar = (embalses < EMBALSES_ALERTA) || horaPico || (precio > PRECIO_CARO);
         return !aplazar;
@@ -116,10 +119,10 @@ public:
 class Negocio {
 private:
     string nombre;
-    Medidor medidor;
-    Carga* cargas[3];
+    Medidor medidor;        // Composición
+    Carga* cargas[3];       // Agregación
     int numCargas;
-    Mercado* mercado;
+    Mercado* mercado;       // Asociación
     float costoCon, costoSin;
     int horasSimuladas, fallas;
 
@@ -154,11 +157,12 @@ public:
             float precio = mercado->precioHora(h);
             float embalses = mercado->nivelEmbalses();
 
+            // 1. Calculo SIN gestor (todas las cargas encendidas)
             float consumoSinHora = 0;
             for (int i = 0; i < numCargas; i++) consumoSinHora += cargas[i]->getPotencia();
             costoSin += consumoSinHora * precio;
 
-            // BREAK: Racionamiento por precio de escasez y embalses bajos
+            // 2. BREAK: Emergencia por racionamiento (Precio > 1500 COP y embalses < 40%)
             if (precio > PRECIO_EMERGENCIA && embalses < EMBALSES_ALERTA) {
                 cout << setw(5) << h << setw(9) << precio << setw(9) << embalses 
                      << "  --> EMERGENCY BREAK: Racionamiento decretado." << endl;
@@ -167,19 +171,31 @@ public:
 
             horasSimuladas++;
 
-            // CONTINUE: Falla de lectura de mercado
+            // 3. CONTINUE: Falla de lectura de mercado (1 de cada 20 horas)
             if (rand() % FALLA_CADA == 0) {
-                for (int i = 0; i < numCargas; i++) {
-                    if (i == 0 && cargas[i]->debeEncender(h, precio, embalses)) cargas[i]->encender();
-                    else cargas[i]->apagar();
-                }
                 fallas++;
-                cout << setw(5) << h << setw(9) << "--" << setw(9) << embalses 
+                float costoFalla = 0, kWhFalla = 0;
+
+                for (int i = 0; i < numCargas; i++) {
+                    if (dynamic_cast<CargaCritica*>(cargas[i])) {
+                        cargas[i]->encender();
+                        costoFalla += cargas[i]->costoHora(precio);
+                        kWhFalla += cargas[i]->getPotencia();
+                    } else {
+                        cargas[i]->apagar();
+                    }
+                }
+
+                // Se acumula la carga critica antes de continuar para mantener estadisticas reales
+                medidor.acumular(kWhFalla, costoFalla);
+                costoCon += costoFalla;
+
+                cout << setw(5) << h << setw(9) << "--" << setw(9) << embalses << "%"
                      << "  --> CONTINUE: Falla de lectura (Solo Critica activa)" << endl;
                 continue;
             }
 
-            // GESTOR Y REGLA 6 (Potencia contratada)
+            // 4. GESTOR DE ENERGIA: Evaluar decisiones polimorficas
             float potenciaEncendida = 0;
             for (int i = 0; i < numCargas; i++) {
                 if (cargas[i]->debeEncender(h, precio, embalses)) {
@@ -190,11 +206,25 @@ public:
                 }
             }
 
+            // 5. REGLA 6: Control dinámico de Potencia Contratada (Apaga la carga aplazable de mayor potencia)
             if (potenciaEncendida > POTENCIA_CONTRATADA) {
-                cout << "  [ALERTA HORA " << h << "]: Exceso potencia (" << potenciaEncendida << " kW). Se apaga Horno." << endl;
-                cargas[1]->apagar();
+                CargaAplazable* mayorCarga = nullptr;
+                for (int i = 0; i < numCargas; i++) {
+                    CargaAplazable* ca = dynamic_cast<CargaAplazable*>(cargas[i]);
+                    if (ca && ca->estaEncendida()) {
+                        if (!mayorCarga || ca->getPotencia() > mayorCarga->getPotencia()) {
+                            mayorCarga = ca;
+                        }
+                    }
+                }
+                if (mayorCarga) {
+                    cout << "  [ALERTA HORA " << h << "]: Exceso potencia (" << potenciaEncendida 
+                         << " kW > " << POTENCIA_CONTRATADA << " kW). Se apaga " << mayorCarga->getNombre() << "." << endl;
+                    mayorCarga->apagar();
+                }
             }
 
+            // 6. Acumulacion normal de consumo y costo en el Medidor
             float costoHoraGestor = 0, kWhHoraGestor = 0;
             for (int i = 0; i < numCargas; i++) {
                 if (cargas[i]->estaEncendida()) {
