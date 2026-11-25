@@ -1,6 +1,7 @@
 // =============================================================
-// WattControl EA2 - Gestor de Energia para Negocios (El Nino 2026)
-// Negocio: Panaderia El Rosario (Digito 0-1)
+// WattControl EA3 - Gestor de Energia para Negocios
+// Negocio: Minimercado El Rosario (Digito 8)
+// Integrante: Stefanya Brighte Fontalvo Padilla
 // =============================================================
 
 #include <iostream>
@@ -13,266 +14,42 @@
 #include <windows.h>
 #endif
 
+#include "Constantes.h"
+#include "Carga.h"
+#include "Medidor.h"
+#include "Mercado.h"
+#include "Negocio.h"
+
 using namespace std;
 
-#define HORAS_DIA 24
+// --- Validacion de texto (string): no vacio, no solo espacios, minimo 3 caracteres ---
+string leerTextoValido(const string& mensaje) {
+    string entrada;
+    bool valido = false;
 
-// --- Constantes del Negocio (Panaderia El Rosario) ---
-const float POTENCIA_REFRIGERACION = 3.0; // Carga Critica (kW)
-const float POTENCIA_HORNO         = 8.0; // Carga Aplazable 1 (kW)
-const float POTENCIA_AMASADORA     = 4.5; // Carga Aplazable 2 (kW)
+    do {
+        cout << mensaje;
+        getline(cin, entrada);
 
-const float POTENCIA_CONTRATADA    = 15.0; // Maxima potencia permitida (kW)
-const float PRECIO_CARO            = 600.0; // COP/kWh (Limite hora pico)
-const float PRECIO_EMERGENCIA      = 1500.0;// COP/kWh (Umbral de racionamiento)
-const float EMBALSES_ALERTA        = 40.0;  // Nivel critico embalses (%)
-
-const int PICO_INICIO              = 18;    // 6 PM
-const int PICO_FIN                 = 20;    // 8 PM
-
-const int MIN_HORAS_HORNO          = 6;     // Horas minimas requeridas por dia
-const int MIN_HORAS_AMASADORA      = 4;
-
-const int FALLA_CADA               = 20;
-
-// --- CLASE BASE ABSTRACTA: Carga ---
-class Carga {
-protected:
-    string nombre;
-    float potenciaKW;
-    bool encendida;
-    int horasUso;
-
-public:
-    Carga(string n, float p) : nombre(n), potenciaKW(p), encendida(false), horasUso(0) {}
-    virtual ~Carga() {}
-
-    // Metodo Virtual Puro (Polimorfismo)
-    virtual bool debeEncender(int hora, float precio, float embalses) = 0;
-
-    void encender() { encendida = true; horasUso++; }
-    void apagar() { encendida = false; }
-    void reiniciarHoras() { horasUso = 0; encendida = false; }
-
-    float costoHora(float precio) { return encendida ? (potenciaKW * precio) : 0.0; }
-
-    string getNombre() { return nombre; }
-    float getPotencia() { return potenciaKW; }
-    bool estaEncendida() { return encendida; }
-    int getHorasUso() { return horasUso; }
-};
-
-// --- HERENCIA 1: Carga Critica ---
-class CargaCritica : public Carga {
-public:
-    CargaCritica(string n, float p) : Carga(n, p) {}
-    bool debeEncender(int hora, float precio, float embalses) override {
-        return true; // Regla 1: Nunca se apaga
-    }
-};
-
-// --- HERENCIA 2: Carga Aplazable ---
-class CargaAplazable : public Carga {
-public:
-    CargaAplazable(string n, float p) : Carga(n, p) {}
-    bool debeEncender(int hora, float precio, float embalses) override {
-        // Reglas 2 a 5: Condicion compuesta con operadores logicos (&&, ||, !)
-        bool horaPico = (hora >= PICO_INICIO && hora <= PICO_FIN);
-        bool aplazar = (embalses < EMBALSES_ALERTA) || horaPico || (precio > PRECIO_CARO);
-        return !aplazar;
-    }
-};
-
-// --- COMPOSICION: Medidor ---
-class Medidor {
-private:
-    float kWhAcumulados;
-    float costoTotal;
-
-public:
-    Medidor() : kWhAcumulados(0), costoTotal(0) {}
-    void reiniciar() { kWhAcumulados = 0; costoTotal = 0; }
-    void acumular(float kWh, float costo) { kWhAcumulados += kWh; costoTotal += costo; }
-    float getKWh() { return kWhAcumulados; }
-    float getCosto() { return costoTotal; }
-};
-
-// --- ASOCIACION: Mercado ---
-class Mercado {
-public:
-    float precioHora(int hora) {
-        int minimo, maximo;
-        if (hora <= 6)       { minimo = 398; maximo = 640;  }
-        else if (hora <= 14) { minimo = 456; maximo = 970;  }
-        else if (hora <= 17) { minimo = 596; maximo = 1040; }
-        else if (hora <= 20) { minimo = 705; maximo = 1612; }
-        else                 { minimo = 565; maximo = 970;  }
-        return minimo + rand() % (maximo - minimo + 1);
-    }
-
-    float nivelEmbalses() {
-        return 30.0 + (rand() % 31);
-    }
-};
-
-// --- CLASE PRINCIPAL: Negocio ---
-class Negocio {
-private:
-    string nombre;
-    Medidor medidor;        // Composición
-    Carga* cargas[3];       // Agregación
-    int numCargas;
-    Mercado* mercado;       // Asociación
-    float costoCon, costoSin;
-    int horasSimuladas, fallas;
-
-public:
-    Negocio(string n, Mercado* m) : nombre(n), mercado(m), numCargas(0), costoCon(0), costoSin(0), horasSimuladas(0), fallas(0) {}
-
-    void agregarCarga(Carga* c) {
-        if (numCargas < 3) cargas[numCargas++] = c;
-    }
-
-    void evaluar(int hora, float precio, float embalses) {
-        cout << "\n--- Evaluacion individual en la hora " << hora << " ---" << endl;
-        for (int i = 0; i < numCargas; i++) {
-            bool dec = cargas[i]->debeEncender(hora, precio, embalses);
-            cout << "  " << setw(22) << left << cargas[i]->getNombre() << right 
-                 << (dec ? " [ENCENDER]" : " [APLAZAR/APAGAR]") << endl;
+        // Quitar espacios al inicio y al final
+        size_t inicio = entrada.find_first_not_of(" \t\r\n");
+        if (inicio == string::npos) {
+            cout << "  [Error]: El texto no puede estar vacio ni contener solo espacios." << endl;
+            continue;
         }
-    }
+        size_t fin = entrada.find_last_not_of(" \t\r\n");
+        entrada = entrada.substr(inicio, fin - inicio + 1);
 
-    void simularDia() {
-        medidor.reiniciar();
-        costoCon = 0; costoSin = 0; horasSimuladas = 0; fallas = 0;
-        for (int i = 0; i < numCargas; i++) cargas[i]->reiniciarHoras();
-
-        cout << fixed << setprecision(0);
-        cout << "\n==================== TABLA DE SIMULACION (24 HORAS) ====================" << endl;
-        cout << setw(5) << "Hora" << setw(9) << "Precio" << setw(9) << "Embalses";
-        for (int i = 0; i < numCargas; i++) cout << setw(15) << cargas[i]->getNombre();
-        cout << setw(12) << "Costo Hora" << endl;
-
-        for (int h = 0; h < HORAS_DIA; h++) {
-            float precio = mercado->precioHora(h);
-            float embalses = mercado->nivelEmbalses();
-
-            // 1. Calculo SIN gestor (todas las cargas encendidas)
-            float consumoSinHora = 0;
-            for (int i = 0; i < numCargas; i++) consumoSinHora += cargas[i]->getPotencia();
-            costoSin += consumoSinHora * precio;
-
-            // 2. BREAK: Emergencia por racionamiento (Precio > 1500 COP y embalses < 40%)
-            if (precio > PRECIO_EMERGENCIA && embalses < EMBALSES_ALERTA) {
-                cout << setw(5) << h << setw(9) << precio << setw(9) << embalses 
-                     << "  --> EMERGENCY BREAK: Racionamiento decretado." << endl;
-                break;
-            }
-
-            horasSimuladas++;
-
-            // 3. CONTINUE: Falla de lectura de mercado (1 de cada 20 horas)
-            if (rand() % FALLA_CADA == 0) {
-                fallas++;
-                float costoFalla = 0, kWhFalla = 0;
-
-                for (int i = 0; i < numCargas; i++) {
-                    if (dynamic_cast<CargaCritica*>(cargas[i])) {
-                        cargas[i]->encender();
-                        costoFalla += cargas[i]->costoHora(precio);
-                        kWhFalla += cargas[i]->getPotencia();
-                    } else {
-                        cargas[i]->apagar();
-                    }
-                }
-
-                // Se acumula la carga critica antes de continuar para mantener estadisticas reales
-                medidor.acumular(kWhFalla, costoFalla);
-                costoCon += costoFalla;
-
-                cout << setw(5) << h << setw(9) << "--" << setw(9) << embalses << "%"
-                     << "  --> CONTINUE: Falla de lectura (Solo Critica activa)" << endl;
-                continue;
-            }
-
-            // 4. GESTOR DE ENERGIA: Evaluar decisiones polimorficas
-            float potenciaEncendida = 0;
-            for (int i = 0; i < numCargas; i++) {
-                if (cargas[i]->debeEncender(h, precio, embalses)) {
-                    cargas[i]->encender();
-                    potenciaEncendida += cargas[i]->getPotencia();
-                } else {
-                    cargas[i]->apagar();
-                }
-            }
-
-            // 5. REGLA 6: Control dinámico de Potencia Contratada (Apaga la carga aplazable de mayor potencia)
-            if (potenciaEncendida > POTENCIA_CONTRATADA) {
-                CargaAplazable* mayorCarga = nullptr;
-                for (int i = 0; i < numCargas; i++) {
-                    CargaAplazable* ca = dynamic_cast<CargaAplazable*>(cargas[i]);
-                    if (ca && ca->estaEncendida()) {
-                        if (!mayorCarga || ca->getPotencia() > mayorCarga->getPotencia()) {
-                            mayorCarga = ca;
-                        }
-                    }
-                }
-                if (mayorCarga) {
-                    cout << "  [ALERTA HORA " << h << "]: Exceso potencia (" << potenciaEncendida 
-                         << " kW > " << POTENCIA_CONTRATADA << " kW). Se apaga " << mayorCarga->getNombre() << "." << endl;
-                    mayorCarga->apagar();
-                }
-            }
-
-            // 6. Acumulacion normal de consumo y costo en el Medidor
-            float costoHoraGestor = 0, kWhHoraGestor = 0;
-            for (int i = 0; i < numCargas; i++) {
-                if (cargas[i]->estaEncendida()) {
-                    costoHoraGestor += cargas[i]->costoHora(precio);
-                    kWhHoraGestor += cargas[i]->getPotencia();
-                }
-            }
-            medidor.acumular(kWhHoraGestor, costoHoraGestor);
-            costoCon += costoHoraGestor;
-
-            cout << setw(5) << h << setw(9) << precio << setw(9) << embalses << "%";
-            for (int i = 0; i < numCargas; i++) cout << setw(15) << (cargas[i]->estaEncendida() ? "ON" : "off");
-            cout << setw(12) << costoHoraGestor << endl;
+        if ((int)entrada.length() < LONGITUD_MIN_TEXTO) {
+            cout << "  [Error]: Debe ingresar al menos " << LONGITUD_MIN_TEXTO << " caracteres." << endl;
+        } else {
+            valido = true;
         }
-        cout << "\nSimulacion concluida." << endl;
-    }
+    } while (!valido);
 
-    void mostrarResumen() {
-        if (horasSimuladas == 0) {
-            cout << "\n[!] Debe ejecutar primero la simulacion (Opcion 3)." << endl;
-            return;
-        }
+    return entrada;
+}
 
-        cout << "\n================ RESUMEN DE OPERACION Y AHORRO ================" << endl;
-        cout << "Negocio: " << nombre << endl;
-        cout << "Horas simuladas: " << horasSimuladas << " / 24 | Fallas: " << fallas << endl << endl;
-
-        for (int i = 0; i < numCargas; i++) {
-            float kWh = cargas[i]->getHorasUso() * cargas[i]->getPotencia();
-            cout << "  * " << setw(22) << left << cargas[i]->getNombre() << right 
-                 << cargas[i]->getHorasUso() << "h uso | " << setw(6) << kWh << " kWh" << endl;
-        }
-
-        cout << "\nCosto CON Gestor:  $" << costoCon << " COP" << endl;
-        cout << "Costo SIN Gestor:  $" << costoSin << " COP" << endl;
-
-        float ahorroPesos = costoSin - costoCon;
-        float ahorroPorcentaje = (costoSin > 0) ? (ahorroPesos / costoSin) * 100.0 : 0.0;
-
-        cout << "AHORRO NETO:       $" << ahorroPesos << " COP (" << fixed << setprecision(1) << ahorroPorcentaje << " %)" << endl;
-
-        if (cargas[1]->getHorasUso() < MIN_HORAS_HORNO || cargas[2]->getHorasUso() < MIN_HORAS_AMASADORA) {
-            cout << "\n[ALERTA]: PRODUCCION INCOMPLETA. No se alcanzaron las horas minimas requeridas." << endl;
-        }
-    }
-};
-
-// --- MENU PRINCIPAL ---
 int main() {
 #ifdef _WIN32
     SetConsoleOutputCP(65001);
@@ -280,48 +57,72 @@ int main() {
 
     srand(time(0));
 
-    Mercado mercado;
-    CargaCritica refr("Refrigeracion Base", POTENCIA_REFRIGERACION);
-    CargaAplazable horno("Horno Electrico", POTENCIA_HORNO);
-    CargaAplazable amasadora("Amasadora Ind.", POTENCIA_AMASADORA);
+    cout << "==========================================================" << endl;
+    cout << "       WATTCONTROL EA3 - REGISTRO DE OPERACION            " << endl;
+    cout << "==========================================================" << endl;
 
-    Negocio negocio("Panaderia El Rosario", &mercado);
+    string nombreNegocio = leerTextoValido("Ingrese el nombre del negocio (ej. Minimercado El Rosario): ");
+    string responsable   = leerTextoValido("Ingrese el nombre del responsable: ");
+
+    Mercado mercado;
+    CargaCritica refr("Vitrina Refrigerada", POTENCIA_VITRINA);
+    CargaAplazable congelacion("Sistemas de Congelacion", POTENCIA_CONGELACION);
+    CargaAplazable clima("Iluminacion/Climatizacion", POTENCIA_CLIMA);
+
+    Negocio negocio(nombreNegocio, responsable, &mercado);
     negocio.agregarCarga(&refr);
-    negocio.agregarCarga(&horno);
-    negocio.agregarCarga(&amasadora);
+    negocio.agregarCarga(&congelacion);
+    negocio.agregarCarga(&clima);
 
     int opcion;
     int hora = 12;
     float precio = 500.0, embalses = 50.0;
 
     do {
-        cout << "\n==============================================" << endl;
-        cout << "      WATTCONTROL - GESTOR DE ENERGIA        " << endl;
-        cout << "==============================================" << endl;
+        cout << "\n==========================================================" << endl;
+        cout << "          WATTCONTROL - GESTOR DE ENERGIA                 " << endl;
+        cout << "   Negocio: " << nombreNegocio << " | Resp: " << responsable << endl;
+        cout << "==========================================================" << endl;
         cout << "1. Ingresar lectura manual (Hora, Precio, Embalses)" << endl;
         cout << "2. Evaluar decision puntual de cada carga" << endl;
-        cout << "3. Simular un dia completo de operacion (24 Horas)" << endl;
-        cout << "4. Ver resumen de ahorro e informe" << endl;
+        cout << "3. Simular un dia aleatorio (24 Horas - EA2)" << endl;
+        cout << "4. Ver resumen diario e informe (EA2)" << endl;
+        cout << "5. Simular semana real XM (21 al 27 sept 2026 - EA3)" << endl;
+        cout << "6. Ver reporte semanal, ahorro y proyeccion mensual (EA3)" << endl;
         cout << "0. Salir" << endl;
         cout << "Seleccione una opcion: ";
-        cin >> opcion;
+
+        if (!(cin >> opcion)) {
+            cin.clear();
+            cin.ignore(10000, '\n');
+            opcion = -1;
+        }
 
         switch (opcion) {
         case 1:
             do {
-                cout << "Hora actual (0 a 23): "; cin >> hora;
-                if (hora < 0 || hora > 23) cout << " Error: Hora (0-23)." << endl;
-            } while (hora < 0 || hora > 23);
+                cout << "Hora actual (" << HORA_MIN << " a " << HORA_MAX << "): ";
+                cin >> hora;
+                if (hora < HORA_MIN || hora > HORA_MAX) {
+                    cout << "  [Error]: Hora fuera de rango (" << HORA_MIN << "-" << HORA_MAX << ")." << endl;
+                }
+            } while (hora < HORA_MIN || hora > HORA_MAX);
 
             do {
-                cout << "Precio de bolsa (COP/kWh > 0): "; cin >> precio;
-                if (precio <= 0) cout << " Error: Precio > 0." << endl;
+                cout << "Precio de bolsa (COP/kWh > 0): ";
+                cin >> precio;
+                if (precio <= 0) {
+                    cout << "  [Error]: El precio debe ser mayor a 0." << endl;
+                }
             } while (precio <= 0);
 
             do {
-                cout << "Nivel de embalses (0 a 100 %): "; cin >> embalses;
-                if (embalses < 0 || embalses > 100) cout << " Error: Embalses (0-100)." << endl;
-            } while (embalses < 0 || embalses > 100);
+                cout << "Nivel de embalses (" << EMBALSE_MIN << " a " << EMBALSE_MAX << " %): ";
+                cin >> embalses;
+                if (embalses < EMBALSE_MIN || embalses > EMBALSE_MAX) {
+                    cout << "  [Error]: Embalses fuera de rango (" << EMBALSE_MIN << "-" << EMBALSE_MAX << ")." << endl;
+                }
+            } while (embalses < EMBALSE_MIN || embalses > EMBALSE_MAX);
             break;
 
         case 2:
@@ -333,15 +134,23 @@ int main() {
             break;
 
         case 4:
-            negocio.mostrarResumen();
+            negocio.mostrarResumenDiario();
+            break;
+
+        case 5:
+            negocio.simularSemana();
+            break;
+
+        case 6:
+            negocio.mostrarReporteSemanal();
             break;
 
         case 0:
-            cout << "\nHasta luego!" << endl;
+            cout << "\nHasta luego! Gracias por usar WattControl." << endl;
             break;
 
         default:
-            cout << "\n[!] Opcion invalida." << endl;
+            cout << "\n[!] Opcion invalida. Intente nuevamente." << endl;
             break;
         }
     } while (opcion != 0);
